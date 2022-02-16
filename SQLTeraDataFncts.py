@@ -13,7 +13,6 @@ import teradatasql
 
 #import datetime
 import logging
-import sys
 import os
 import csv
 import re
@@ -32,8 +31,8 @@ class NullCursorException(Exception):
 class ConfigFileNotfnd(Exception):
     "Configuration file not found: "
 
-
 DUPLICATE_ROW_ERROR_CD = "2801"
+
 
 ###############################
 # Create log path+filename
@@ -50,18 +49,6 @@ logfile = os.path.join(log_dir,"SQLPythonTeraData.log")
 #       called before any logger messages written. Subsequent calls to basicConfig function within
 #       program run are ignored.
 #       https://docs.python.org/3/howto/logging.html
-"""
-logging.basicConfig(
-    #format="%(asctime)s %(levelname)-8s %(threadName)s %(funcName)s %(message)s", #--> %(name)s give logger name
-    format="%(asctime)s %(levelname)-8s %(funcName)-12s %(message)s",
-    encoding='utf-8',
-    datefmt="%Y-%m-%d %H:%M:%S", 
-    #filename=logfile, 
-    handlers=[
-    logging.FileHandler(logfile),
-    logging.StreamHandler(sys.stdout)],
-    level=logging.INFO)
-"""
 
 logger = logging.getLogger("SQLTeraDataFncts") 
 logger.setLevel(logging.INFO)
@@ -88,13 +75,13 @@ td_hostx = "dz-nlb-common-in-thk-14c6b2e1d1e98dcc.elb.us-east-1.amazonaws.com"
 ###############################
 # Functions
 ###############################
-
 def closeConnection(cnx):
 
     logger.debug("start function closeConnection()")
 
     if cnx is not None:
         cnx.close()
+
 
 def getConnection():
 
@@ -166,8 +153,6 @@ def getAllRows(sqlStmt, tupParms):
     #########################################################
     logger.info("start function getAllRows()")
 
-    global sSelectColNames
-
     try:
 
         cnx = getConnection()
@@ -185,9 +170,9 @@ def getAllRows(sqlStmt, tupParms):
 
         records = cursor.fetchall()
 
-        # get list of columns
-        sSelectColNames = getCursorColumns(cursor.description)
-        logger.debug("cursor columns: "+sSelectColNames)
+        # create list of column names
+        loadCursorColumnList(cursor.description)
+        logger.debug("cursor columns: "+ str(cursor.description))
 
         return records
 
@@ -225,6 +210,10 @@ def getManyRowsCursor(sqlStmt, tupParms):
         else:
             cursor.execute(sqlStmt, tupParms)
 
+        # create list of column names
+        loadCursorColumnList(cursor.description)
+        logger.debug("cursor columns: "+ str(cursor.description))
+
         return cursor    
 
     except teradatasql.Error as e:
@@ -233,6 +222,7 @@ def getManyRowsCursor(sqlStmt, tupParms):
         if cursor is not None:
             cursor.close()
         raise
+
 
 def getManyRowsNext(cursor, rows2Read):
     ##############################################
@@ -362,26 +352,22 @@ def getErrorCode(ex):
 
     return sErrorCode    
 
-
-def getCursorColumns(cursor_desc):
-    # cursor_desc = cursor.description
-    #
-    # get a csv list of columns
-    sCols = ""
-    for column in cursor_desc:
-        if sCols == "":
-            sCols = str(column[0])
-        else:        
-            sCols += "," + str(column[0])  
-
-    return sCols 
-
-
 def getDriverVersion(cnx):
 
     with cnx.cursor () as cur:
         cur.execute ('{fn teradata_nativesql}Driver version {fn teradata_driver_version}  Database version {fn teradata_database_version}')
         return (cur.fetchone() [0])
+
+
+def loadCursorColumnList(cursorDescription):
+
+    global cursorColumnNames 
+    cursorColumnNames = []
+
+    for column in cursorDescription:
+        cursorColumnNames.append(column[0])
+
+    return True 
 
 
 def createCSVFile(sFilename, header, rows, cDelim):
@@ -393,7 +379,8 @@ def createCSVFile(sFilename, header, rows, cDelim):
     with open(sFilename, 'w', newline='', encoding="utf-8") as csvfile:
         filewriter = csv.writer(csvfile, delimiter=cDelim,
                                 quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        #filewriter.writerow(header)
+        if header != None:                        
+            filewriter.writerow(header)
         filewriter.writerows(rows)
 
 

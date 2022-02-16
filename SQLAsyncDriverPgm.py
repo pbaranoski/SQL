@@ -16,16 +16,21 @@ import logging
 #psutil (FYI)
 
 MAX_NOF_ACTIVE_THREADS = 5
-CHUNK_SIZE_NOF_ROWS = 10
+CHUNK_SIZE_NOF_ROWS = 10000
 
 sThreadRCMsgs = []
 
 ###############################
 # Create log path+filename
 ###############################
-log_dir = os.path.join(os.getcwd(), "logs")
+app_dir = os.getcwd()
+log_dir = os.path.join(app_dir, "logs")
+data_dir = os.path.join(app_dir, "temp")
+
 if not os.path.exists(log_dir):
     os.mkdir(log_dir)
+if not os.path.exists(data_dir):
+    os.mkdir(data_dir)
 
 mainLogfile = os.path.join(log_dir,"geoMainProcess.log")
 
@@ -42,6 +47,18 @@ SqlStmtGeo2 = """
     FROM CMS_WORK_COMM_CDEV.GEOCODE_ADRRESS
   ;
 """
+SqlStmtGeo1 = """
+   SELECT GEO_ADR_LINE_1_ADR, GEO_ADR_LINE_2_ADR, GEO_ADR_LINE_3_ADR, GEO_ADR_LINE_4_ADR, GEO_ADR_LINE_5_ADR, GEO_ADR_LINE_6_ADR,
+        GEO_ADR_FULL_ADR, 
+        GEO_ADR_CITY_NAME, GEO_USPS_STATE_CD, GEO_ZIP5_CD, GEO_ZIP4_CD,
+        GEO_SK, GEO_ADR_GIS_MATCH_SCRE_NUM, GEO_ADR_GIS_MATCH_ADR, GEO_ADR_GIS_ADR_RULE_CD,
+        GEO_ADR_GIS_LON_QTY, GEO_ADR_GIS_LAT_QTY,
+        IDR_INSRT_TS, IDR_UPDT_TS
+    FROM CMS_VIEW_GEO_CDEV.V1_GEO_ADR
+    WHERE GEO_USPS_STATE_CD = 'MD'
+  ;
+"""
+#     AND GEO_ZIP5_CD = '21204'
 
 ###############################
 # functions
@@ -51,7 +68,7 @@ def getManyRows():
     ##################################################
     # Get results-set in subsets of records
     ##################################################
-    cursor = SQLTeraDataFncts.getManyRowsCursor(SqlStmtGeo2, None)
+    cursor = SQLTeraDataFncts.getManyRowsCursor(SqlStmtGeo1, None)
 
     ##################################################
     # Print results-set by 1) full row 2) flds in row
@@ -104,25 +121,26 @@ def geoCodeChildProcess(ThreadNum, rows):
     threadLogger.info(f"Thread {ThreadNum} - Started at "+getDateTime())
 
     ###########################################
-    # Do processing
+    # How many rows retrieved?
     ###########################################
-    threadLogger.info(f"Thread {ThreadNum} - Geocoding process started.")
-    time.sleep(5+ThreadNum)
-
-    threadLogger.info(f"Thread {ThreadNum} - Retrieved results-set.")
-
-    #for row in rows:
-    #    threadLogger.info("full record: "+str(row))
     nofRows = len(rows)
     threadLogger.info(f"Thread {ThreadNum} - Retrieved {nofRows} rows.")
 
-    threadLogger.info(f"Thread {ThreadNum} - Converted results-set to csv file")
+    ###########################################
+    # Create delimited file from results-set
+    ###########################################
+    threadLogger.info(f"Thread {ThreadNum} - Converting results-set to csv file")
+
+    csvFile = os.path.join(data_dir,f"resultsSet_{ThreadNum}.csv")
+    SQLTeraDataFncts.createCSVFile(csvFile, sCursorColNames, rows, ",")
 
     threadLogger.info(f"Thread {ThreadNum} - Calling geocoding module")
-    time.sleep(1)
+    time.sleep(3)
 
     threadLogger.info(f"Thread {ThreadNum} - Starting bulk insert into DB.")
-    time.sleep(1)
+    time.sleep(3)
+
+    # Delete csv file
 
     threadLogger.info(f"Thread {ThreadNum} - Geocoding process ended.")
 
@@ -140,6 +158,12 @@ def geoCodeChildProcess(ThreadNum, rows):
 
 
 def main():
+
+    ###############################
+    # variables
+    ###############################
+    bEndofChunks = False
+    threads = []
 
     ###############################
     # Config main logfile
@@ -162,21 +186,22 @@ def main():
     ###################################################
     #getManyRows()
     #sys.exit(0)
+    global sCursorColNames
 
-    bEndofChunks = False
-    cursor = SQLTeraDataFncts.getManyRowsCursor(SqlStmtGeo2, None)
+    cursor = SQLTeraDataFncts.getManyRowsCursor(SqlStmtGeo1, None)
+    sCursorColNames = SQLTeraDataFncts.cursorColumnNames
 
     ###################################################
     # Create Initial x number of threads
     ###################################################
     rootLogger.info("Start initial threads")
 
-    threads = []
-
     for i in range(1, MAX_NOF_ACTIVE_THREADS + 1):
 
         # get next chunk of data
         rows = SQLTeraDataFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
+        #rootLogger.info("Column List: "+SQLTeraDataFncts.getCursorColumnsCSVStr(","))
+
         # if no-more-data --> break from for-loop
         if len(rows) == 0:
             bEndofChunks = True
@@ -252,6 +277,7 @@ def main():
     rootLogger.info("jobRC = "+str(jobRC))
 
     sys.exit(jobRC)
+
 
 if __name__ == "__main__":  # confirms that the code is under main function
     main()

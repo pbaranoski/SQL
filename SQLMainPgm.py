@@ -58,10 +58,17 @@ SqlStmtGeo2 = """
 
 SqlStmtGeo3 = "SELECT ADR_LINE_1, ADR_LINE_2, ADR_LINE_3, ADR_LINE_4, ADR_LINE_5, ADR_LINE_6, ADR_FULL, CITY_NAME, USPS_STATE_CD, POSTAL_CD, POSTAL_EXT, ADD_GEO_SK, GEO_ADR_GIS_MATCH_SCRE_NUM, GEO_ADR_GIS_MATCH_ADR, GEO_ADR_GIS_ADR_RULE_CD, GEO_ADR_GIS_LON_QTY, GEO_ADR_GIS_LAT_QTY, IDR_INSRT_TS, IDR_UPDT_TS FROM CMS_WORK_COMM_CDEV.GEOCODE_ADRRESS;"
 
-SqlStmtCols = """select columnname 
+SqlStmtCols = """select databasename 
                     from dbc.columns
-                    where tablename ='GEOCODE_ADRRESS'
+                    where tablename ='GEOCODE_ADDRESS'
+                    ;
+"""
+
+SqlStmtCols2 = """select columnname 
+                    from dbc.columns
+                    where tablename ='GEOCODE_ADDRESS'
                     and databasename = 'CMS_WORK_COMM_CDEV';
+
 """
 
 SqlStmt2 = """
@@ -94,19 +101,21 @@ def getAllRows():
     # Get all rows in results-set
     ############################################
     #rows = SQLTeraDataFncts.getAllRows(SqlStmt2, None)
-    rows = SQLTeraDataFncts.getAllRows(SqlStmtGeo, None)
-    sColNames = SQLTeraDataFncts.sSelectColNames
-    SQLTeraDataFncts.logger.debug(sColNames)
+    #rows = SQLTeraDataFncts.getAllRows(SqlStmtGeo, None)
+    rows = SQLTeraDataFncts.getAllRows(SqlStmtCols, None)    
+
+    #sColNames = SQLTeraDataFncts.sSelectColNames
+    #SQLTeraDataFncts.logger.debug(sColNames)
 
     # Convert comma-del string into a List
-    lColNames = sColNames.split(",")
+    #lColNames = sColNames.split(",")
 
     #dfResults = pandas.DataFrame(rows, columns= lColNames)
     #print(dfResults)
     #dfResults.to_csv(csvFile, sep = ",", index=False, line_terminator = "\n")
 
     # Create delimited file from results-set
-    SQLTeraDataFncts.createCSVFile(csvFile, lColNames, rows, ",")
+    #SQLTeraDataFncts.createCSVFile(csvFile, lColNames, rows, ",")
 
     ##################################################
     # Print results-set by 1) full row 2) flds in row
