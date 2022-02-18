@@ -1,8 +1,9 @@
-# Asynchronous Process Driver
+# Asynchronous Thread Process Driver
 # author: Paul Baranoski
 # 2022-02-14
 #
 from threading import Thread
+import multiprocessing
 
 import SQLTeraDataFncts
 
@@ -15,8 +16,8 @@ import logging
 # process and system utilities) is a cross-platform library for retrieving information on running processes and system utilization (CPU, memory, disks, network, sensors) 
 #psutil (FYI)
 
-MAX_NOF_ACTIVE_THREADS = 15
-CHUNK_SIZE_NOF_ROWS = 10000
+MAX_NOF_ACTIVE_THREADS = 10
+CHUNK_SIZE_NOF_ROWS = 15000
 
 sThreadRCMsgs = []
 
@@ -144,7 +145,6 @@ def geoCodeChildProcess(ThreadNum, rows):
         rootLogger.info(f"Thread {ThreadNum} - Ended at "+getDateTime())
 
     except Exception as ex:
-        rootLogger.error(ex)
         RC = 12
 
     ###########################################
@@ -199,7 +199,8 @@ def main():
         else:
             iTotNOFRows += iNOFRows 
 
-        th = Thread(target=geoCodeChildProcess, args=(i, rows))
+
+        th = multiprocessing.Process(target=geoCodeChildProcess, args=(i, rows))
         threads.append(th)
 
         rootLogger.info(f"Thread {th.name} started at "+getDateTime())
@@ -240,14 +241,14 @@ def main():
                 ################################
                 rootLogger.info("Start a new thread!")
                 iThreadNum +=1
-                th = Thread(target=geoCodeChildProcess, args=(iThreadNum, rows))
+                th = multiprocessing.Process(target=geoCodeChildProcess, args=(iThreadNum, rows))
 
                 # add thread to list of threads to monitor
                 threads.append(th)
 
                 rootLogger.info(f"Start new thread {th.name} started at "+getDateTime())
                 th.start()
-                rootLogger.info(f"Thread {th.name} id: "+str(th.native_id))
+                rootLogger.info(f"Thread {th.name} id: "+str(th.pid))
      
                 
     ###################################################
@@ -284,78 +285,10 @@ def main():
     rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
     rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
     rootLogger.info("MAX_NOF_ACTIVE_THREADS:" + str(MAX_NOF_ACTIVE_THREADS))
-    rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))    
-
-    sys.exit(jobRC)
-
-def mainNoThreads():
-
-    ###############################
-    # variables
-    ###############################
-    bEndofChunks = False
-    iTotNOFRows = 0
-    iChunkNum = 0
-
-    ###############################
-    # Starting info
-    ###############################
-    StartJobTime = datetime.datetime.now()
-
-    rootLogger.info("\n##########################")
-    rootLogger.info("Start function mainNoThreads")
-
-    ###################################################
-    # get DB cursor
-    ###################################################
-    global sCursorColNames
-
-    cursor = SQLTeraDataFncts.getManyRowsCursor(SqlStmtGeo1, None)
-    sCursorColNames = SQLTeraDataFncts.cursorColumnNames
-
-    ###################################################
-    # Create Initial x number of threads
-    ###################################################
-    rootLogger.info("Start process")
-
-    while bEndofChunks == False:
-        # get next chunk of data
-        rows = SQLTeraDataFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
-
-        # if no-more-data 
-        iNOFRows = len(rows)
-        if iNOFRows == 0:
-            bEndofChunks = True
-            break
-        else:
-            iTotNOFRows += iNOFRows 
-            iChunkNum += 1
-            geoCodeChildProcess(iChunkNum, rows)
-
-                
-    ###################################################
-    # Set job RC from thread RCs.
-    ###################################################        
-    jobRC = 0
-    rootLogger.info("jobRC = "+str(jobRC))
-
-    ###################################################
-    # Print statistics
-    ################################################### 
-    frmtNOFRows = "{:,}".format(iTotNOFRows)
-    EndJobTime = datetime.datetime.now()
-    ElapsedTime = str(EndJobTime - StartJobTime)
-
-    rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
-    rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
-    rootLogger.info("No Thread Process:")
-    rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))    
+    rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))
 
     sys.exit(jobRC)
 
 
 if __name__ == "__main__":  # confirms that the code is under main function
     main()
-    #mainNoThreads()
-
-
