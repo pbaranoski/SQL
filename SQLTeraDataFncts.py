@@ -63,8 +63,9 @@ logger = logging.getLogger()
 ##########################################
 # TeraData Connection string values
 ##########################################
-#td_username = 'IDRC_PTB_ETL_DEV'
-#td_password = 'z#6Ogo1F9_9_EMe'
+#td_username = 'IDRC_BEPSD_ETL_DEV'
+#td_password = 't#9LBL717Dd7#Xd'
+#td_hostx = "dd-proxy.biaaws.local"
 td_username = 'BZH3'
 td_password = 'trbf0f0F'
 td_database = "DBC"
@@ -295,11 +296,50 @@ def UpdateRow(cnx, sqlStmt, tupParms):
                 cursor.close()
 
 
+def DeleteRows(sqlStmt, tupParms):
+    ##########################################################
+    #
+    ##########################################################
+    logger.debug("start function DeleteRows()")
+
+    try:
+
+        cnx = getConnection()
+
+        # Make sure connection is valid
+        if cnx is None:
+            raise NullCursorException()            
+
+        cursor = cnx.cursor()
+        if cursor is None:
+            raise NullCursorException()
+
+        # parameters must be a tuple
+        if tupParms is None:
+            cursor.execute(sqlStmt)
+        else:
+            cursor.execute(sqlStmt, tupParms)
+
+        # May want to remove this from here, and control commits from Main program.
+        cnx.commit()
+        logger.info("rows removed!")
+
+
+    except teradatasql.Error as e:
+        logger.error("Error with SQL Delete: "+sqlStmt) 
+        logger.error(e)
+        raise
+
+    finally: 
+        if cnx is not None:
+            if cursor is not None:
+                cursor.close()
+
+
 def insertRow(cnx, sqlStmt, tupParms):
-    #########################################################################################
-    # MySQL does not have a way to execute an INSERT statement directly from the connection
-    # object
-    #########################################################################################
+    ##########################################################
+    #
+    ##########################################################
     logger.debug("start function insertRow()")
 
     try:
@@ -410,11 +450,11 @@ def getExportCSVFile(cnx, sFilename, sSQLSelect):
         raise
 
 
-def bulkInsertTDReadCSV(cnx, sFilename, sSQLInsert):
+def bulkInsertTDReadCSV(cnx, csvFilename, sSQLInsert):
 
     logger.info("start function bulkInsertTDReadCSV()")
 
-    sFastImportSQL = "{fn teradata_read_csv(" + sFilename + ")} " + sSQLInsert
+    sFastImportSQL = "{fn teradata_read_csv(" + csvFilename + ")} " + sSQLInsert
 
     try:
 
@@ -430,7 +470,13 @@ def bulkInsertTDReadCSV(cnx, sFilename, sSQLInsert):
 
 
 def bulkInsertTDFastLoad(cnx, sSQLInsert, lstParms):
-
+    ##################################################
+    # lstParms = Python List of sets of parameters
+    # NOTE: This is not a csv file.
+    # NOTE: Fastload only works on empty table, so 
+    # cannot be used for "chunking" a set of new 
+    # rows.
+    ##################################################
     logger.info("start function bulkFastLoadTD()")
 
     sFastLoadSQL = "{fn teradata_try_fastload}" + sSQLInsert
@@ -448,48 +494,49 @@ def bulkInsertTDFastLoad(cnx, sSQLInsert, lstParms):
         raise
 
 
-def unquoteNoneNullValues(row): 
-
-    # Expect row = list
-    logger.debug("start function unquoteNoneNullValues")
-
-    for i in range(len(row)):
-        if re.match("NONE",str(row[i]).upper() ):
-            row[i] = None        
+def convertNoValue2NullValue(row):
+    ############################################
+    # convert empty string to "None"
+    ############################################
+    conv = lambda fld : fld or None
+    row = [conv(fld) for fld in row]
 
     return row     
 
 
-def bulkInsertCSVReader(cnx, sFilename, sSQLInsert):
-
-    logger.info("start function bulkInsertCSVReader()")
+def bulkInsrtUpdtCSVReader(cnx, sFilename, sSQLInsert, bHeader):
+    ##############################################
+    # sFilename = csv file
+    ##############################################
+    logger.info("start function bulkInsrtUpdtCSVReader()")
 
     try:
 
         with open(sFilename, 'r', newline='') as csvfile:
             with cnx.cursor () as cur:
 
-                # NOTE: csv.reader is:
-                # 1) converting empty value to a empty string instead of Python None/Null
-                # 2) converting None in file to string 'None'
-                # NOTE: This causes problem when inserting/updating a timestamp column (UPDT_TS)
+                ######################################################################################
+                # NOTE: csv.reader converts empty value to an empty string instead of Python None/Null
+                # NOTE: This causes problem when inserting/updating a timestamp column (i.e., UPDT_TS)
                 #  where a string is not a valid timestamp value. 
-                # NOTE: Need to have "None" in csv file where values to insert are NULL.
+                # NOTE: Need to have keyword None in csv file where values to insert are NULL.
+                ######################################################################################
 
-                cur.execute (sSQLInsert, [ unquoteNoneNullValues(row) for row in csv.reader(csvfile,quoting=csv.QUOTE_MINIMAL)] )
+                csv_reader = csv.reader(csvfile,quoting=csv.QUOTE_MINIMAL)
+                if bHeader:
+                    next(csv_reader)
+
+                cur.execute (sSQLInsert, [ convertNoValue2NullValue(row) for row in csv_reader] )
                 #cur.execute(sSQLInsert, Parms)
+                
+                cnx.commit()
 
-        logger.info("rows inserted!")   
+        logger.info("rows inserted/updated!")   
 
     except Exception as e:
-        logger.error("Error in function bulkInsertCSVReader: "+sSQLInsert) 
+        logger.error("Error in function bulkInsrtUpdtCSVReader: "+sSQLInsert) 
         logger.error("csv filename: "+sFilename)
         logger.error(e)
-
-        #sRequest = "{fn teradata_nativesql}{fn teradata_get_errors}" + sSQLInsert
-        #cnx.cursor().execute (sRequest)
-        #for row in cur.fetchall(): 
-        #    logger.error(row)
 
         raise
 
