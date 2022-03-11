@@ -243,14 +243,13 @@ def mainThreadDriver(sSqlStmt,sStateList):
     # variables
     ###############################
     bEndofChunks = False
-    iTotNOFRows = 0
     activeThreads = []
+    global iTotNOFRows
+    iTotNOFRows = 0
 
     ###############################
     # Starting info
     ###############################
-    StartJobTime = datetime.datetime.now()
-
     rootLogger.info("Start function mainThreadDriver")
 
     ###################################################
@@ -278,7 +277,7 @@ def mainThreadDriver(sSqlStmt,sStateList):
             bEndofChunks = True
             break
         else:
-            iTotNOFRows += iNOFRows 
+             iTotNOFRows += iNOFRows 
 
         th = Thread(target=geoCodeThreadProcess, args=(i, rows))
         activeThreads.append(th)
@@ -339,37 +338,6 @@ def mainThreadDriver(sSqlStmt,sStateList):
     for t in activeThreads:
         t.join()   
 
-    ###################################################
-    # Set job RC from thread RCs.
-    ###################################################        
-    jobRC = 0
-    rootLogger.debug("Thread RCs")
-
-    for sRCMsg in sThreadRCMsgs:
-        rootLogger.debug(sRCMsg)
-        arrMsg = sRCMsg.split("=")
-        threadRC = int(arrMsg[1].strip())
-        if threadRC != 0:
-            jobRC = threadRC
-
-
-    ###################################################
-    # Print statistics
-    ################################################### 
-    frmtNOFRows = "{:,}".format(iTotNOFRows)
-    EndJobTime = datetime.datetime.now()
-    ElapsedTime = str(EndJobTime - StartJobTime)
-
-    rootLogger.info("jobRC = "+str(jobRC))
-
-    rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
-    rootLogger.info(f"States processed: {sStateList}") 
-    rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
-    rootLogger.info("MAX_NOF_ACTIVE_THREADS:" + str(MAX_NOF_ACTIVE_THREADS))
-    rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))    
-
-
-    sys.exit(jobRC)
 
 
 """
@@ -445,11 +413,12 @@ def main():
     #    Iterates thru all available states passing a subset 
     #    of states each time it calls mainThreadDriver
     ########################################################
+    StartJobTime = datetime.datetime.now()
+
     rootLogger.info("\n##########################")
     rootLogger.info("Start function main")
 
-
-    SQLFncts.DeleteRows(SqlDelete, None)
+    #SQLFncts.DeleteRows(SqlDelete, None)
 
     #################################################
     # get all states that need addresses geocoded
@@ -480,6 +449,37 @@ def main():
         sSQL2Process = SqlStmtGeo1.replace("?",sStateList)
         #rootLogger.debug(sSQL2Process)
         mainThreadDriver(sSQL2Process,sStateList)
+
+
+    ###################################################
+    # Set job RC from thread RCs.
+    ###################################################        
+    jobRC = 0
+    rootLogger.debug("Thread RCs")
+
+    for sRCMsg in sThreadRCMsgs:
+        rootLogger.debug(sRCMsg)
+        arrMsg = sRCMsg.split("=")
+        threadRC = int(arrMsg[1].strip())
+        if threadRC != 0:
+            jobRC = threadRC
+
+    ###################################################
+    # Print statistics
+    ################################################### 
+    frmtNOFRows = "{:,}".format(iTotNOFRows)
+    EndJobTime = datetime.datetime.now()
+    ElapsedTime = str(EndJobTime - StartJobTime)
+
+    rootLogger.info("jobRC = "+str(jobRC))
+
+    rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
+    rootLogger.info(f"States processed: {sStateList}") 
+    rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
+    rootLogger.info("MAX_NOF_ACTIVE_THREADS:" + str(MAX_NOF_ACTIVE_THREADS))
+    rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))    
+
+    sys.exit(jobRC)
 
 
 if __name__ == "__main__":  # confirms that the code is under main function
