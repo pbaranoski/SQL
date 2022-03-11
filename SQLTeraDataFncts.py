@@ -5,22 +5,20 @@
 #
 
 import teradatasql
+
+#from sqlalchemy import create_engine
+##from dbmodule import connect
+
 #pip install sqlalchemy-teradata (must be present on system to use sqlalchemy with teradata)
 # NOTE: Alchemy appears to use ODBC connections to database. Need 64-bit ODBC teradata driver to use
 #       with pandas. Can only find 32-bit drivers, and that is all that is installed on my machine.
 # pyodbc python package - generic database package. Need ODBC 64-bit driver
 #import teradataml (FYI)
 
-#import datetime
-import logging
 import os
 import csv
-import re
+import logging
 
-from sqlalchemy import create_engine
-#from dbmodule import connect
-
-from logging import NullHandler
 
 class NullConnectException(Exception):
     "Connection object is null"
@@ -57,8 +55,6 @@ formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(funcName)-12s %(mes
 fh.setFormatter(formatter)
 logger.addHandler(fh)
 
-logger = logging.getLogger() 
-
 
 ##########################################
 # TeraData Connection string values
@@ -67,7 +63,7 @@ logger = logging.getLogger()
 #td_password = 't#9LBL717Dd7#Xd'
 #td_hostx = "dd-proxy.biaaws.local"
 td_username = 'BZH3'
-td_password = 'trbf0f0F'
+td_password = 'pgbg0g0G'
 td_database = "DBC"
 #td_hostx = "pz-nlb-common-in-thk-55ee045e137bee2c.elb.us-east-1.amazonaws.com"
 td_hostx = "dz-nlb-common-in-thk-14c6b2e1d1e98dcc.elb.us-east-1.amazonaws.com"
@@ -110,40 +106,6 @@ def getConnection():
         raise
 
     return cnx
-
-
-def getConnectionEngine():
-    ##################################
-    # need 64-bit ODBC driver for this
-    ##################################
-
-    logger.debug("start function getConnectionEngine()")
-
-    eng = None
-
-    try:
-
-        ###################################################
-        # Connect to Engine
-        ###################################################     
-        eng = create_engine(url="teradata://{0}:{1}@{2}:22/?authentication=LDAP?driver=Teradata)".format(td_username, td_password, td_hostx))
-
-        #teradatasqlalchemy.teradatasql.connect
-
-        if eng is None:
-            print("engine NOT created!")
-        else:
-            print("Engine created!")    
-
-        logger.info("Connected to Database!")
-        logger.info(getDriverVersion(eng))
-
-    except teradatasql.Error as err:    
-        logger.error("Could NOT connect to Database!")
-        logger.error(err)
-        raise
-
-    return eng
 
 
 def getAllRows(sqlStmt, tupParms):
@@ -204,6 +166,8 @@ def getManyRowsCursor(sqlStmt, tupParms):
 
         if cursor is None:
             raise NullCursorException()
+
+        logger.debug(f"SQL: {sqlStmt}")
 
         # parameters must be a tuple
         if tupParms is None:
@@ -392,6 +356,7 @@ def getErrorCode(ex):
 
     return sErrorCode    
 
+
 def getDriverVersion(cnx):
 
     with cnx.cursor () as cur:
@@ -411,14 +376,16 @@ def loadCursorColumnList(cursorDescription):
 
 
 def createCSVFile(sFilename, header, rows, cDelim):
-    ############################
+    ####################################################################
     # Rows = results-set
-    ############################
+    # NOTE: QUOTE_ALL --> so that zip_code '00000' can be treated as 
+    #       string and not integer
+    ####################################################################
     logger.debug("start function createCSVFile()")
 
     with open(sFilename, 'w', newline='', encoding="utf-8") as csvfile:
         filewriter = csv.writer(csvfile, delimiter=cDelim,
-                                quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                                quotechar='"', quoting=csv.QUOTE_ALL)
         if header != None:                        
             filewriter.writerow(header)
         filewriter.writerows(rows)

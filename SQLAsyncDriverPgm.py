@@ -1,10 +1,10 @@
 # Asynchronous Process Driver
-# author: Paul Baranoski
+# Author: Paul Baranoski
 # 2022-02-14
 #
-from threading import Thread
+import SQLTeraDataFncts as SQLFncts
 
-import SQLTeraDataFncts
+from threading import Thread
 
 import pandas as pd
 import time
@@ -19,8 +19,11 @@ import logging
 MAX_NOF_ACTIVE_THREADS = 15
 CHUNK_SIZE_NOF_ROWS = 10000
 
+NOF_STATES_2_PROCESS_AT_ONCE = 5
+
 sThreadRCMsgs = []
-#TotRows = []
+
+arrListOfStates = None
 
 ###############################
 # Create log path+filename
@@ -34,7 +37,8 @@ if not os.path.exists(log_dir):
 if not os.path.exists(data_dir):
     os.mkdir(data_dir)
 
-mainLogfile = os.path.join(log_dir,"geoMainProcess.log")
+dttm = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+mainLogfile = os.path.join(log_dir,f"geoMainProcess_{dttm}.log")
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(threadName)-12s %(funcName)-22s %(message)s",
@@ -67,13 +71,14 @@ SqlStmtGeo1 = """
         GEO_ADR_GIS_LON_QTY, GEO_ADR_GIS_LAT_QTY,
         IDR_INSRT_TS, IDR_UPDT_TS
     FROM CMS_VIEW_GEO_CDEV.V1_GEO_ADR
-    WHERE GEO_USPS_STATE_CD = 'MD'
+    WHERE GEO_USPS_STATE_CD IN ( ? )
  ;
 """
 #     AND GEO_ZIP5_CD = '21204'
 ##    AND GEO_ZIP5_CD = '21236'
-#     AND GEO_ADR_LINE_1_ADR like '%BELAIR RD%'
-#   AND GEO_ADR_LINE_1_ADR like '9657 BELAIR RD UNIT 1474%'
+#       AND IDR_UPDT_TS is NULL
+#    AND GEO_ADR_FULL_ADR = '1441 N ROLLING ROAD' AND GEO_ZIP5_CD = '00000'
+#    AND GEO_ADR_FULL_ADR = '8139 RITCHIE HWY' AND GEO_ADR_CITY_NAME = 'NA'
 
 SqlInsert = """
         INSERT INTO CMS_WORK_COMM_CDEV.GEOCODE_ADRRESS_BLK_INSRT (
@@ -108,6 +113,14 @@ SqlUpdate = """
 
 SqlDelete = """
     DELETE FROM CMS_WORK_COMM_CDEV.GEOCODE_ADRRESS_BLK_INSRT
+"""
+
+SqlListOfStates = """
+    SELECT TRIM(GEO_USPS_STATE_CD) as GEO_USPS_STATE_CD
+      FROM CMS_VIEW_GEO_CDEV.V1_GEO_USPS_STATE_CD 
+    WHERE NOT GEO_USPS_STATE_CD IN  '~'
+    AND       GEO_USPS_STATE_CD IN ('MD', 'RI')
+    ORDER BY 1
 """
 
 ###############################
@@ -148,7 +161,7 @@ def geoCodeThreadProcess(ThreadNum, rows):
 
         csvFile = os.path.join(data_dir,f"resultsSet_{ThreadNum}.csv")
         #pdCSVFile = os.path.join(data_dir,f"pandasSet_{ThreadNum}.csv")
-        SQLTeraDataFncts.createCSVFile(csvFile, sCursorColNames, rows, ",")
+        SQLFncts.createCSVFile(csvFile, sCursorColNames, rows, ",")
 
         ##############################################
         # Call ArcGIS function to Geocode results-set
@@ -156,11 +169,13 @@ def geoCodeThreadProcess(ThreadNum, rows):
         rootLogger.info(f"Thread {ThreadNum} - Calling geocoding module")
         time.sleep(3)
 
-        ##############################################
+        ####################################################################
         # Format CSV file into correct order of fields   
         # needed for Update SQL statement.
-        ##############################################
-        df = pd.read_csv(csvFile)
+        # NOTE: dtype=str --> prevents zip-code '00000' from being read and 
+        #       written as '0'.
+        ####################################################################
+        df = pd.read_csv(csvFile, dtype=str, keep_default_na=False)
         #rootLogger.debug(pd)
         
         # Include ONLY required columns for SQL statement.
@@ -178,26 +193,29 @@ def geoCodeThreadProcess(ThreadNum, rows):
                                               
 
         #rootLogger.debug(dfReorderedCols)
-        dfReorderedCols.to_csv(csvFile, index=False)
+        ############################################################
+        # NOTE: keep_default_na prevents 'NA' string from being
+        #       from being converted to null value.
+        ############################################################       
+        #dfReorderedCols.to_csv(csvFile, index=False)
 
         #########################################
         # Perform bulk insert into DB.
         #########################################
         rootLogger.info(f"Thread {ThreadNum} - Starting bulk insert into DB.")
         
-        cnx = SQLTeraDataFncts.getConnection()
+        cnx = SQLFncts.getConnection()
         if cnx is None:
-            raise SQLTeraDataFncts.NullConnectException(f"Thread {ThreadNum} could not connect to DB.")    
+            raise SQLFncts.NullConnectException(f"Thread {ThreadNum} could not connect to DB.")    
 
-        #SQLTeraDataFncts.bulkInsertTDReadCSV(cnx, csvFile, SqlInsert)
-        #SQLTeraDataFncts.bulkInsrtUpdtCSVReader(cnx, csvFile, SqlInsert, True)
-        SQLTeraDataFncts.bulkInsrtUpdtCSVReader(cnx, csvFile, SqlUpdate, True)
+        SQLFncts.bulkInsrtUpdtCSVReader(cnx, csvFile, SqlInsert, True)
+        #SQLFncts.bulkInsrtUpdtCSVReader(cnx, csvFile, SqlUpdate, True)
 
         ##############################################
         # Thread clean-up: 1) Close DB connection
         #                  2) Remove files not needed.
         ##############################################
-        SQLTeraDataFncts.closeConnection(cnx)
+        SQLFncts.closeConnection(cnx)
 
         rootLogger.info(f"Thread {ThreadNum} - Thread clean-up.")
         os.remove(csvFile)
@@ -219,7 +237,7 @@ def geoCodeThreadProcess(ThreadNum, rows):
     return RC
 
 
-def main():
+def mainThreadDriver(sSqlStmt,sStateList):
 
     ###############################
     # variables
@@ -233,18 +251,15 @@ def main():
     ###############################
     StartJobTime = datetime.datetime.now()
 
-    rootLogger.info("\n##########################")
-    rootLogger.info("Start function main")
-
-    #SQLTeraDataFncts.DeleteRows(SqlDelete, None)
+    rootLogger.info("Start function mainThreadDriver")
 
     ###################################################
     # get DB cursor
     ###################################################
     global sCursorColNames
 
-    cursor = SQLTeraDataFncts.getManyRowsCursor(SqlStmtGeo1, None)
-    sCursorColNames = SQLTeraDataFncts.cursorColumnNames
+    cursor = SQLFncts.getManyRowsCursor(sSqlStmt, None)
+    sCursorColNames = SQLFncts.cursorColumnNames
 
     ###################################################
     # Create Initial x number of threads
@@ -254,8 +269,8 @@ def main():
     for i in range(1, MAX_NOF_ACTIVE_THREADS + 1):
 
         # get next chunk of data
-        rows = SQLTeraDataFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
-        #rootLogger.info("Column List: "+SQLTeraDataFncts.getCursorColumnsCSVStr(","))
+        rows = SQLFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
+        #rootLogger.info("Column List: "+SQLFncts.getCursorColumnsCSVStr(","))
 
         # if no-more-data --> break from for-loop
         iNOFRows = len(rows)
@@ -292,7 +307,7 @@ def main():
                 activeThreads.remove(t)
 
                 # get next chunk of data
-                rows = SQLTeraDataFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
+                rows = SQLFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
                 iNOFRows = len(rows)
                 if iNOFRows == 0:
                     bEndofChunks = True
@@ -333,11 +348,10 @@ def main():
     for sRCMsg in sThreadRCMsgs:
         rootLogger.debug(sRCMsg)
         arrMsg = sRCMsg.split("=")
-        threadRC = arrMsg[1]
+        threadRC = int(arrMsg[1].strip())
         if threadRC != 0:
             jobRC = threadRC
 
-    rootLogger.info("jobRC = "+str(jobRC))
 
     ###################################################
     # Print statistics
@@ -346,14 +360,19 @@ def main():
     EndJobTime = datetime.datetime.now()
     ElapsedTime = str(EndJobTime - StartJobTime)
 
+    rootLogger.info("jobRC = "+str(jobRC))
+
     rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
+    rootLogger.info(f"States processed: {sStateList}") 
     rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
     rootLogger.info("MAX_NOF_ACTIVE_THREADS:" + str(MAX_NOF_ACTIVE_THREADS))
     rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))    
 
+
     sys.exit(jobRC)
 
 
+"""
 def mainNoThreads():
 
     ###############################
@@ -376,8 +395,8 @@ def mainNoThreads():
     ###################################################
     global sCursorColNames
 
-    cursor = SQLTeraDataFncts.getManyRowsCursor(SqlStmtGeo1, None)
-    sCursorColNames = SQLTeraDataFncts.cursorColumnNames
+    cursor = SQLFncts.getManyRowsCursor(SqlStmtGeo1, None)
+    sCursorColNames = SQLFncts.cursorColumnNames
 
     ###################################################
     # Create Initial x number of threads
@@ -386,7 +405,7 @@ def mainNoThreads():
 
     while bEndofChunks == False:
         # get next chunk of data
-        rows = SQLTeraDataFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
+        rows = SQLFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
 
         # if no-more-data 
         iNOFRows = len(rows)
@@ -418,9 +437,53 @@ def mainNoThreads():
     rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))    
 
     sys.exit(jobRC)
+"""
+
+def main():
+    ########################################################
+    # Main program driver: 
+    #    Iterates thru all available states passing a subset 
+    #    of states each time it calls mainThreadDriver
+    ########################################################
+    rootLogger.info("\n##########################")
+    rootLogger.info("Start function main")
+
+
+    SQLFncts.DeleteRows(SqlDelete, None)
+
+    #################################################
+    # get all states that need addresses geocoded
+    #################################################
+    arrListOfStates = SQLFncts.getAllRows(SqlListOfStates, None)
+    maxNOFStates = len(arrListOfStates)
+
+    rootLogger.info(f"NOF States to process:{maxNOFStates}")
+
+    #################################################
+    # 1) Extract a subset of states 
+    # 2) Format State In-Phrase
+    # 3) Replace parm marker with State In-Phrase
+    # 4) Call mainThreadDriver
+    #################################################
+    for i in range (0, maxNOFStates, NOF_STATES_2_PROCESS_AT_ONCE):
+        stateList = arrListOfStates[i : i+NOF_STATES_2_PROCESS_AT_ONCE]
+
+        l = [",".join(st) for st in stateList]
+        sStateList = "'" + "','".join(l) + "'"
+        rootLogger.info(f"List of States to process: {sStateList} ")
+
+        #########################################################
+        # Replace param marker with list of states in SELECT. 
+        # NOTE: Did it this way because single parm with commas 
+        #       was being treated as separate parms. 
+        #########################################################
+        sSQL2Process = SqlStmtGeo1.replace("?",sStateList)
+        #rootLogger.debug(sSQL2Process)
+        mainThreadDriver(sSQL2Process,sStateList)
 
 
 if __name__ == "__main__":  # confirms that the code is under main function
+
     main()
     #mainNoThreads()
 
