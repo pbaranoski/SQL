@@ -19,6 +19,7 @@ import logging
 MAX_NOF_ACTIVE_THREADS = 15
 CHUNK_SIZE_NOF_ROWS = 10000
 
+MAX_NOF_RETRIES = 3
 NOF_STATES_2_PROCESS_AT_ONCE = 5
 
 sThreadRCMsgs = []
@@ -119,7 +120,7 @@ SqlListOfStates = """
     SELECT TRIM(GEO_USPS_STATE_CD) as GEO_USPS_STATE_CD
       FROM CMS_VIEW_GEO_CDEV.V1_GEO_USPS_STATE_CD 
     WHERE NOT GEO_USPS_STATE_CD IN  '~'
-    AND       GEO_USPS_STATE_CD IN ('MD', 'RI')
+    AND       GEO_USPS_STATE_CD IN ('MD')
     ORDER BY 1
 """
 
@@ -193,30 +194,39 @@ def geoCodeThreadProcess(ThreadNum, rows):
                                               
 
         #rootLogger.debug(dfReorderedCols)
-        ############################################################
-        # NOTE: keep_default_na prevents 'NA' string from being
-        #       from being converted to null value.
-        ############################################################       
-        #dfReorderedCols.to_csv(csvFile, index=False)
+        ################################################## 
+        # NOTE: keep_default_na causes 'NA' string to be
+        #       converted to null value.
+        ##################################################       
+        dfReorderedCols.to_csv(csvFile, index=False)
 
         #########################################
         # Perform bulk insert into DB.
         #########################################
-        rootLogger.info(f"Thread {ThreadNum} - Starting bulk insert into DB.")
+        rootLogger.info(f"Thread {ThreadNum} - Starting bulk insert/update into DB.")
         
-        cnx = SQLFncts.getConnection()
-        if cnx is None:
-            raise SQLFncts.NullConnectException(f"Thread {ThreadNum} could not connect to DB.")    
+        # NOTE: perform re-try logic if connection times out.
+        bBulkUpdatedCompleted = False
+        iRetryCount = 1
+        
+        while not bBulkUpdatedCompleted:
+            try:
+                #SQLFncts.bulkInsrtUpdtCSVReader(cnx, csvFile, SqlInsert, True)
+                SQLFncts.bulkInsrtUpdtCSVReader(csvFile, SqlUpdate, True)
+                bBulkUpdatedCompleted = True
 
-        SQLFncts.bulkInsrtUpdtCSVReader(cnx, csvFile, SqlInsert, True)
-        #SQLFncts.bulkInsrtUpdtCSVReader(cnx, csvFile, SqlUpdate, True)
+            except Exception as e:
+                rootLogger.info(f"Thread {ThreadNum} - Re-try Bulk Insert/Update.")
+                iRetryCount += 1
+                if iRetryCount > MAX_NOF_RETRIES:
+                    bBulkUpdatedCompleted = True
+                    # re-raise the error to be caught at end of this function
+                    raise
 
         ##############################################
         # Thread clean-up: 1) Close DB connection
         #                  2) Remove files not needed.
         ##############################################
-        SQLFncts.closeConnection(cnx)
-
         rootLogger.info(f"Thread {ThreadNum} - Thread clean-up.")
         os.remove(csvFile)
 
@@ -476,8 +486,8 @@ def main():
     rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
     rootLogger.info(f"States processed: {sStateList}") 
     rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
-    rootLogger.info("MAX_NOF_ACTIVE_THREADS:" + str(MAX_NOF_ACTIVE_THREADS))
-    rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))    
+    rootLogger.info("MAX_NOF_ACTIVE_THREADS: " + str(MAX_NOF_ACTIVE_THREADS))
+    rootLogger.info("CHUNK_SIZE_NOF_ROWS: " + str(CHUNK_SIZE_NOF_ROWS))    
 
     sys.exit(jobRC)
 

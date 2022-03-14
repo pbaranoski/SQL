@@ -30,6 +30,7 @@ class ConfigFileNotfnd(Exception):
     "Configuration file not found: "
 
 DUPLICATE_ROW_ERROR_CD = "2801"
+TRANS_ABORTED_2_DEADLOCK = "2631"
 
 
 ###############################
@@ -471,13 +472,20 @@ def convertNoValue2NullValue(row):
     return row     
 
 
-def bulkInsrtUpdtCSVReader(cnx, sFilename, sSQLInsert, bHeader):
+def bulkInsrtUpdtCSVReader(sFilename, sSQLInsert, bHeader):
     ##############################################
     # sFilename = csv file
     ##############################################
     logger.info("start function bulkInsrtUpdtCSVReader()")
 
     try:
+
+        ######################################################################################
+        # Connect to DB
+        ######################################################################################
+        cnx = getConnection()
+        if cnx is None:
+            raise NullConnectException(f"Could not connect to DB.")  
 
         with open(sFilename, 'r', newline='') as csvfile:
             with cnx.cursor () as cur:
@@ -488,7 +496,6 @@ def bulkInsrtUpdtCSVReader(cnx, sFilename, sSQLInsert, bHeader):
                 #  where a string is not a valid timestamp value. 
                 # NOTE: Need to have keyword None in csv file where values to insert are NULL.
                 ######################################################################################
-
                 csv_reader = csv.reader(csvfile,quoting=csv.QUOTE_MINIMAL)
                 if bHeader:
                     next(csv_reader)
@@ -500,11 +507,18 @@ def bulkInsrtUpdtCSVReader(cnx, sFilename, sSQLInsert, bHeader):
 
         logger.info("rows inserted/updated!")   
 
+    except NullConnectException as ex:
+        logger.error(ex)
+        raise
+
     except Exception as e:
         logger.error("Error in function bulkInsrtUpdtCSVReader: "+sSQLInsert) 
         logger.error("csv filename: "+sFilename)
         logger.error(e)
-
         raise
 
+    finally:
+
+        if cnx is not None:
+            cnx.close()                
            
