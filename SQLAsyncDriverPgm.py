@@ -2,6 +2,7 @@
 # Author: Paul Baranoski
 # 2022-02-14
 #
+
 import SQLTeraDataFncts as SQLFncts
 
 from threading import Thread
@@ -12,23 +13,30 @@ import os
 import sys
 import datetime
 import logging
+import configparser
 
-# process and system utilities) is a cross-platform library for retrieving information on running processes and system utilization (CPU, memory, disks, network, sensors) 
-#psutil (FYI)
 
+class ConfigFileNotfnd(Exception):
+    "Configuration file not found: "
+
+# global parameter values    
 MAX_NOF_ACTIVE_THREADS = 15
 CHUNK_SIZE_NOF_ROWS = 10000
 
 MAX_NOF_RETRIES = 3
-NOF_STATES_2_PROCESS_AT_ONCE = 5
+NOF_STATES_2_PROCESS_AT_ONCE = 2
+STATES_2_PROCESS = ""
 
+# Array that stores RC of threads
 sThreadRCMsgs = []
 
+# Array of states to process; 'ALL' or csv-list of states
 arrListOfStates = None
 
-###############################
-# Create log path+filename
-###############################
+#####################################
+# 1) Create and configure log file
+# 2) Ensure that temp directory exists
+#####################################
 app_dir = os.getcwd()
 log_dir = os.path.join(app_dir, "logs")
 data_dir = os.path.join(app_dir, "temp")
@@ -73,6 +81,7 @@ SqlStmtGeo1 = """
         IDR_INSRT_TS, IDR_UPDT_TS
     FROM CMS_VIEW_GEO_CDEV.V1_GEO_ADR
     WHERE GEO_USPS_STATE_CD IN ( ? )
+    AND GEO_ZIP5_CD = '21204'
  ;
 """
 #     AND GEO_ZIP5_CD = '21204'
@@ -116,11 +125,18 @@ SqlDelete = """
     DELETE FROM CMS_WORK_COMM_CDEV.GEOCODE_ADRRESS_BLK_INSRT
 """
 
-SqlListOfStates = """
+SqlListOfSomeStates = """
     SELECT TRIM(GEO_USPS_STATE_CD) as GEO_USPS_STATE_CD
       FROM CMS_VIEW_GEO_CDEV.V1_GEO_USPS_STATE_CD 
     WHERE NOT GEO_USPS_STATE_CD IN  '~'
-    AND       GEO_USPS_STATE_CD IN ('MD')
+    AND       GEO_USPS_STATE_CD IN (?)
+    ORDER BY 1
+"""
+
+SqlListOfAllStates = """
+    SELECT TRIM(GEO_USPS_STATE_CD) as GEO_USPS_STATE_CD
+      FROM CMS_VIEW_GEO_CDEV.V1_GEO_USPS_STATE_CD 
+    WHERE NOT GEO_USPS_STATE_CD IN  '~'
     ORDER BY 1
 """
 
@@ -133,7 +149,7 @@ def getDateTime():
 
 
 ###############################################
-# Asynchronous function
+# Thread function to execute Asynchronously.
 ###############################################
 def geoCodeThreadProcess(ThreadNum, rows):
 
@@ -247,7 +263,7 @@ def geoCodeThreadProcess(ThreadNum, rows):
     return RC
 
 
-def mainThreadDriver(sSqlStmt,sStateList):
+def mainThreadDriver(sSqlStmt):
 
     ###############################
     # variables
@@ -417,84 +433,156 @@ def mainNoThreads():
     sys.exit(jobRC)
 """
 
+def getAppConfigValues():
+    ###############################
+    # Get App config filename
+    ###############################
+    try:
+
+        rootLogger.info("Get App configuration values from config file.")
+
+        curDir = os.getcwd()
+        #configPath = os.path.join(curDir,"config")
+        configPath = curDir
+        configPathFilename = os.path.join(configPath,"GeoCodingConfig.cfg")
+        if os.path.exists(configPathFilename):
+            pass
+        else:
+            raise ConfigFileNotfnd(f"Configuration file notfnd: {configPathFilename}")
+
+        ###############################
+        # Extract configuration values
+        ###############################
+        config = configparser.ConfigParser()
+        config.read(configPathFilename)
+
+        global MAX_NOF_ACTIVE_THREADS
+        global CHUNK_SIZE_NOF_ROWS
+        global MAX_NOF_RETRIES
+        global NOF_STATES_2_PROCESS_AT_ONCE
+        global STATES_2_PROCESS
+
+        MAX_NOF_ACTIVE_THREADS = int(config.get('RunParms','maxThreads'))
+        CHUNK_SIZE_NOF_ROWS = int(config.get('RunParms','chunkSize'))
+        MAX_NOF_RETRIES = int(config.get('RunParms','maxRetries'))
+        NOF_STATES_2_PROCESS_AT_ONCE = int(config.get('RunParms','NOFStates2AtOnce'))
+        STATES_2_PROCESS = config.get('RunParms','States2Process')
+
+        rootLogger.info(f"MAX_NOF_ACTIVE_THREADS={MAX_NOF_ACTIVE_THREADS}")
+        rootLogger.info(f"CHUNK_SIZE_NOF_ROWS={CHUNK_SIZE_NOF_ROWS}")
+        rootLogger.info(f"MAX_NOF_RETRIES={MAX_NOF_RETRIES}")
+        rootLogger.info(f"NOF_STATES_2_PROCESS_AT_ONCE={NOF_STATES_2_PROCESS_AT_ONCE}")
+        rootLogger.info(f"STATES_2_PROCESS={STATES_2_PROCESS}")
+
+    except Exception as ex:
+        rootLogger.error(ex)
+        raise
+
+
 def main():
     ########################################################
     # Main program driver: 
-    #    Iterates thru all available states passing a subset 
-    #    of states each time it calls mainThreadDriver
+    #    Iterates thru all states to be processed,
+    #       passing a subset of states each time it call 
+    #       mainThreadDriver.
+    # NOTE: NOF_STATES_2_PROCESS_AT_ONCE = subset of states.
     ########################################################
-    StartJobTime = datetime.datetime.now()
+    try:
+        StartJobTime = datetime.datetime.now()
 
-    rootLogger.info("\n##########################")
-    rootLogger.info("Start function main")
+        rootLogger.info("\n##########################")
+        rootLogger.info("Start function main")
 
-    #SQLFncts.DeleteRows(SqlDelete, None)
+        # Delete rows when inserting
+        #SQLFncts.DeleteRows(SqlDelete, None)
 
-    #################################################
-    # get all states that need addresses geocoded
-    #################################################
-    arrListOfStates = SQLFncts.getAllRows(SqlListOfStates, None)
-    maxNOFStates = len(arrListOfStates)
+        #################################################
+        # get Configuration Values
+        #################################################
+        getAppConfigValues()
 
-    rootLogger.info(f"NOF States to process:{maxNOFStates}")
-
-    #################################################
-    # 1) Extract a subset of states 
-    # 2) Format State In-Phrase
-    # 3) Replace parm marker with State In-Phrase
-    # 4) Call mainThreadDriver
-    #################################################
-    for i in range (0, maxNOFStates, NOF_STATES_2_PROCESS_AT_ONCE):
-        stateList = arrListOfStates[i : i+NOF_STATES_2_PROCESS_AT_ONCE]
-
-        l = [",".join(st) for st in stateList]
-        sStateList = "'" + "','".join(l) + "'"
-        rootLogger.info(f"List of States to process: {sStateList} ")
-
-        #########################################################
-        # Replace param marker with list of states in SELECT. 
-        # NOTE: Did it this way because single parm with commas 
-        #       was being treated as separate parms. 
-        #########################################################
-        sSQL2Process = SqlStmtGeo1.replace("?",sStateList)
-        #rootLogger.debug(sSQL2Process)
-        mainThreadDriver(sSQL2Process,sStateList)
+        #################################################
+        # get list of states that need addresses geocoded
+        #################################################
+        if STATES_2_PROCESS == "ALL":
+            sSQLStates2Process = SqlListOfAllStates
+        else:
+            arrStates = STATES_2_PROCESS.split(",")
+            sStates2Process = "'" + "','".join(arrStates) + "'"
+            rootLogger.debug(sStates2Process)
+            # For In-phrase, passing a comma-delim list is treated as muliple parms instead of one parm.
+            # This results in an error when only one parameter marker is in SQL.
+            sSQLStates2Process = SqlListOfSomeStates.replace("?",sStates2Process)            
 
 
-    ###################################################
-    # Set job RC from thread RCs.
-    ###################################################        
-    jobRC = 0
-    rootLogger.debug("Thread RCs")
+        rootLogger.debug(sSQLStates2Process)
+        arrListOfStates = SQLFncts.getAllRows(sSQLStates2Process, None)
 
-    for sRCMsg in sThreadRCMsgs:
-        rootLogger.debug(sRCMsg)
-        arrMsg = sRCMsg.split("=")
-        threadRC = int(arrMsg[1].strip())
-        if threadRC != 0:
-            jobRC = threadRC
+        maxNOFStates = len(arrListOfStates)
+        rootLogger.info(f"NOF States to process: {maxNOFStates}")
 
-    ###################################################
-    # Print statistics
-    ################################################### 
-    frmtNOFRows = "{:,}".format(iTotNOFRows)
-    EndJobTime = datetime.datetime.now()
-    ElapsedTime = str(EndJobTime - StartJobTime)
+        #################################################
+        # 1) Extract a subset of states 
+        # 2) Format State In-Phrase
+        # 3) Replace parm marker with State In-Phrase
+        # 4) Call mainThreadDriver
+        #################################################
+        for i in range (0, maxNOFStates, NOF_STATES_2_PROCESS_AT_ONCE):
+            stateList = arrListOfStates[i : i+NOF_STATES_2_PROCESS_AT_ONCE]
 
-    rootLogger.info("jobRC = "+str(jobRC))
+            l = [",".join(st) for st in stateList]
+            sStateList = "'" + "','".join(l) + "'"
+            rootLogger.info(f"List of States to process: {sStateList} ")
 
-    rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
-    rootLogger.info(f"States processed: {sStateList}") 
-    rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
-    rootLogger.info("MAX_NOF_ACTIVE_THREADS: " + str(MAX_NOF_ACTIVE_THREADS))
-    rootLogger.info("CHUNK_SIZE_NOF_ROWS: " + str(CHUNK_SIZE_NOF_ROWS))    
+            #########################################################
+            # Replace param marker with list of states in SELECT. 
+            # NOTE: In-phrase csv-list of values is treated as if 
+            #       multiple parms instead of one. 
+            #########################################################
+            sSQL2Process = SqlStmtGeo1.replace("?",sStateList)
+            #rootLogger.debug(sSQL2Process)
+            mainThreadDriver(sSQL2Process)
 
-    sys.exit(jobRC)
+
+        ###################################################
+        # Set job RC from thread RCs.
+        ###################################################        
+        jobRC = 0
+        rootLogger.debug("Thread RCs")
+
+        for sRCMsg in sThreadRCMsgs:
+            rootLogger.debug(sRCMsg)
+            arrMsg = sRCMsg.split("=")
+            threadRC = int(arrMsg[1].strip())
+            if threadRC != 0:
+                jobRC = threadRC
+
+        ###################################################
+        # Print statistics
+        ################################################### 
+        frmtNOFRows = "{:,}".format(iTotNOFRows)
+        EndJobTime = datetime.datetime.now()
+        ElapsedTime = str(EndJobTime - StartJobTime)
+
+        rootLogger.info("jobRC = "+str(jobRC))
+
+        rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
+        rootLogger.info(f"States processed: {sStateList}") 
+        rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
+        rootLogger.info("MAX_NOF_ACTIVE_THREADS: " + str(MAX_NOF_ACTIVE_THREADS))
+        rootLogger.info("CHUNK_SIZE_NOF_ROWS: " + str(CHUNK_SIZE_NOF_ROWS))    
+
+        sys.exit(jobRC)
+
+    except Exception as ex:
+        rootLogger.error(ex)
+        rootLogger.error("Processing terminated because of errors!")
 
 
 if __name__ == "__main__":  # confirms that the code is under main function
 
     main()
     #mainNoThreads()
+
 
 
