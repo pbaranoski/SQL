@@ -510,8 +510,8 @@ def main():
             arrStates = STATES_2_PROCESS.split(",")
             sStates2Process = "'" + "','".join(arrStates) + "'"
             rootLogger.debug(sStates2Process)
-            # For In-phrase, passing a comma-delim list is treated as muliple parms instead of one parm.
-            # This results in an error when only one parameter marker is in SQL.
+            # NOTE: For In-phrase, passing a comma-delim list is treated as muliple parms instead of 
+            # one parm. This results in an error when only one parameter marker is in SQL.
             sSQLStates2Process = SqlListOfSomeStates.replace("?",sStates2Process)            
 
 
@@ -522,7 +522,7 @@ def main():
         rootLogger.info(f"NOF States to process: {maxNOFStates}")
 
         #################################################
-        # 1) Extract a subset of states 
+        # 1) Extract a subset of states to process
         # 2) Format State In-Phrase
         # 3) Replace parm marker with State In-Phrase
         # 4) Call mainThreadDriver
@@ -532,7 +532,7 @@ def main():
 
             l = [",".join(st) for st in stateList]
             sStateList = "'" + "','".join(l) + "'"
-            rootLogger.info(f"List of States to process: {sStateList} ")
+            rootLogger.info(f"Next Set of States to process: {sStateList} ")
 
             #########################################################
             # Replace param marker with list of states in SELECT. 
@@ -567,7 +567,7 @@ def main():
         rootLogger.info("jobRC = "+str(jobRC))
 
         rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
-        rootLogger.info(f"States processed: {sStateList}") 
+        rootLogger.info(f"States processed: {STATES_2_PROCESS}") 
         rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
         rootLogger.info("MAX_NOF_ACTIVE_THREADS: " + str(MAX_NOF_ACTIVE_THREADS))
         rootLogger.info("CHUNK_SIZE_NOF_ROWS: " + str(CHUNK_SIZE_NOF_ROWS))    
