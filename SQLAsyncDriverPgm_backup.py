@@ -2,11 +2,10 @@
 # Author: Paul Baranoski
 # 2022-02-14
 #
-
+from ast import Pass
 import SQLTeraDataFncts as SQLFncts
 
-#from threading import Thread
-import threading
+from threading import Thread
 
 import pandas as pd
 import time
@@ -16,36 +15,26 @@ import datetime
 import logging
 import configparser
 
+# process and system utilities) is a cross-platform library for retrieving information on running processes and system utilization (CPU, memory, disks, network, sensors) 
+#psutil (FYI)
 
 class ConfigFileNotfnd(Exception):
     "Configuration file not found: "
-
-class NextStateRunException(Exception):
-    "A thread for a state run generated a RC 12. "
-
-# global parameter values    
+    
 MAX_NOF_ACTIVE_THREADS = 15
 CHUNK_SIZE_NOF_ROWS = 10000
 
 MAX_NOF_RETRIES = 3
-NOF_STATES_2_PROCESS_AT_ONCE = 2
+NOF_STATES_2_PROCESS_AT_ONCE = 5
 STATES_2_PROCESS = ""
 
-# Array that stores RC of threads
 sThreadRCMsgs = []
-# Array that stores list of job stats
-arrJobStatMsgs = []
 
-# Array of states to process for Job--> 'ALL' or csv-list of states
 arrListOfStates = None
 
-# Total NOF rows processed by Job
-iTotNOFRows = 0
-
-#####################################
-# 1) Create and configure log file
-# 2) Ensure that temp directory exists
-#####################################
+###############################
+# Create log path+filename
+###############################
 app_dir = os.getcwd()
 log_dir = os.path.join(app_dir, "logs")
 data_dir = os.path.join(app_dir, "temp")
@@ -56,8 +45,6 @@ if not os.path.exists(data_dir):
     os.mkdir(data_dir)
 
 dttm = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-
-rptFile = os.path.join(data_dir,f"geoCodingSummaryReport_{dttm}.csv")
 mainLogfile = os.path.join(log_dir,f"geoMainProcess_{dttm}.log")
 
 logging.basicConfig(
@@ -92,12 +79,10 @@ SqlStmtGeo1 = """
         IDR_INSRT_TS, IDR_UPDT_TS
     FROM CMS_VIEW_GEO_CDEV.V1_GEO_ADR
     WHERE GEO_USPS_STATE_CD IN ( ? )
-
  ;
 """
 #     AND GEO_ZIP5_CD = '21204'
 ##    AND GEO_ZIP5_CD = '21236'
-#     AND GEO_ZIP5_CD = '88888'
 #       AND IDR_UPDT_TS is NULL
 #    AND GEO_ADR_FULL_ADR = '1441 N ROLLING ROAD' AND GEO_ZIP5_CD = '00000'
 #    AND GEO_ADR_FULL_ADR = '8139 RITCHIE HWY' AND GEO_ADR_CITY_NAME = 'NA'
@@ -137,18 +122,11 @@ SqlDelete = """
     DELETE FROM CMS_WORK_COMM_CDEV.GEOCODE_ADRRESS_BLK_INSRT
 """
 
-SqlListOfSomeStates = """
+SqlListOfStates = """
     SELECT TRIM(GEO_USPS_STATE_CD) as GEO_USPS_STATE_CD
       FROM CMS_VIEW_GEO_CDEV.V1_GEO_USPS_STATE_CD 
     WHERE NOT GEO_USPS_STATE_CD IN  '~'
-    AND       GEO_USPS_STATE_CD IN (?)
-    ORDER BY 1
-"""
-
-SqlListOfAllStates = """
-    SELECT TRIM(GEO_USPS_STATE_CD) as GEO_USPS_STATE_CD
-      FROM CMS_VIEW_GEO_CDEV.V1_GEO_USPS_STATE_CD 
-    WHERE NOT GEO_USPS_STATE_CD IN  '~'
+    AND       GEO_USPS_STATE_CD IN ('MD')
     ORDER BY 1
 """
 
@@ -161,11 +139,12 @@ def getDateTime():
 
 
 ###############################################
-# Thread function to execute Asynchronously.
+# Asynchronous function
 ###############################################
-def geoCodeThreadProcess(rows):
+def geoCodeThreadProcess(ThreadNum, rows):
 
     try:
+
         ###########################################
         # Set initial thread RC value
         ###########################################
@@ -174,16 +153,7 @@ def geoCodeThreadProcess(rows):
         ###########################################
         # Start main thread processing
         ###########################################
-        rootLogger.info(f"Thread started at "+getDateTime())
-
-        ###########################################
-        # Extract Thread num from ThreadName
-        # Note: ThreadName = "Thread-N"
-        ###########################################
-        ThreadName = threading.current_thread().getName()
-        arr = ThreadName.split("-")
-        ThreadNum = arr[1]
-        #rootLogger.debug(f"extracted thread num: |{ThreadNum}|")
+        rootLogger.info(f"Thread {ThreadNum} - Started at "+getDateTime())
 
         ###########################################
         # How many rows retrieved?
@@ -283,169 +253,177 @@ def geoCodeThreadProcess(rows):
     return RC
 
 
-def mainThreadDriver(sSqlStmt, sStateList):
+def mainThreadDriver(sSqlStmt,sStateList):
+
     ###############################
     # variables
     ###############################
-    global iTotNOFRows
-    global sThreadRCMsgs
-    
-    stateRunRC = 0
-    iStateNOFRows = 0
     bEndofChunks = False
     activeThreads = []
-    sThreadRCMsgs = []
+    global iTotNOFRows
+    iTotNOFRows = 0
 
     ###############################
-    # Process next set of states
+    # Starting info
     ###############################
-    try:
+    rootLogger.info("Start function mainThreadDriver")
 
-        ###############################
-        # Starting info
-        ###############################
-        rootLogger.info("Start function mainThreadDriver")
+    ###################################################
+    # get DB cursor
+    ###################################################
+    global sCursorColNames
 
-        StartNextStatesTime = datetime.datetime.now()
+    cursor = SQLFncts.getManyRowsCursor(sSqlStmt, None)
+    sCursorColNames = SQLFncts.cursorColumnNames
 
-        ###################################################
-        # get DB cursor
-        ###################################################
-        global sCursorColNames
+    ###################################################
+    # Create Initial x number of threads
+    ###################################################
+    rootLogger.info("Start initial threads")
 
-        cursor = SQLFncts.getManyRowsCursor(sSqlStmt, None)
-        sCursorColNames = SQLFncts.cursorColumnNames
+    for i in range(1, MAX_NOF_ACTIVE_THREADS + 1):
 
-        ###################################################
-        # Create Initial x number of threads
-        ###################################################
-        rootLogger.info("Start initial threads")
+        # get next chunk of data
+        rows = SQLFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
+        #rootLogger.info("Column List: "+SQLFncts.getCursorColumnsCSVStr(","))
 
-        for i in range(1, MAX_NOF_ACTIVE_THREADS + 1):
+        # if no-more-data --> break from for-loop
+        iNOFRows = len(rows)
+        if iNOFRows == 0:
+            bEndofChunks = True
+            break
+        else:
+             iTotNOFRows += iNOFRows 
 
-            # get next chunk of data
-            rows = SQLFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
-            #rootLogger.debug("Column List: "+SQLFncts.getCursorColumnsCSVStr(","))
+        th = Thread(target=geoCodeThreadProcess, args=(i, rows))
+        activeThreads.append(th)
 
-            # if no-more-data --> break from for-loop
-            iNOFRows = len(rows)
-            if iNOFRows == 0:
-                bEndofChunks = True
-                break
-            else:
-                iStateNOFRows += iNOFRows 
+        rootLogger.info(f"Thread {th.name} started at "+getDateTime())
+        th.start()
+        rootLogger.info(f"Thread {th.name} id: "+str(th.native_id))
 
-            th = threading.Thread(target=geoCodeThreadProcess, args=(rows,))
-            activeThreads.append(th)
+    ###################################################
+    # Monitor processing of threads.
+    # Continue to start threads until no-more-chunks
+    # of data. Start a new thread only after a thread has 
+    # completed.
+    ###################################################
+    rootLogger.info("Monitor threads")
 
-            rootLogger.info(f"Thread {th.name} started at "+getDateTime())
-            th.start()
-            rootLogger.info(f"Thread {th.name} id: "+str(th.native_id))
+    iThreadNum = MAX_NOF_ACTIVE_THREADS
 
-        ###################################################
-        # Monitor processing of threads.
-        # 1) Continue to start threads until no-more-chunks
-        # of data. 
-        # 2) Start a new thread only after a thread has 
-        # completed.
-        ###################################################
-        rootLogger.info("Monitor threads")
+    while not bEndofChunks:
 
-        while not bEndofChunks:
-
-            for t in activeThreads:
-                if not t.is_alive():  
-                    rootLogger.info(f"Thread {t.name} completed.")
-
-                    # remove thread from array of active threads to monitor
-                    activeThreads.remove(t)
-
-                    # get next chunk of data
-                    rows = SQLFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
-                    iNOFRows = len(rows)
-                    if iNOFRows == 0:
-                        bEndofChunks = True
-                        break
-                    else:
-                        iStateNOFRows += iNOFRows 
-
-                    ################################        
-                    # start new thread
-                    ################################
-                    rootLogger.info("Start a new thread!")
-
-                    th = threading.Thread(target=geoCodeThreadProcess, args=(rows,))
-
-                    # add thread to list of threads to monitor
-                    activeThreads.append(th)
-
-                    rootLogger.info(f"Start new thread {th.name} started at "+getDateTime())
-                    th.start()
-                    rootLogger.info(f"Thread {th.name} id: "+str(th.native_id))
-        
-                    
-        ###################################################
-        # wait for remaining active threads to complete
-        ###################################################
-        rootLogger.info("Waiting for threads to finish")
-
-        # Wait for threads to complete
         for t in activeThreads:
-            t.join()   
+            if not t.is_alive():  
+                rootLogger.info(f"Thread {t.name} completed.")
 
-        ###################################################
-        # Set job RC from thread RCs.
-        # Note: set RC for each set of states processed.
-        ###################################################        
-        stateRunRC = 0
-        rootLogger.debug("Thread RCs")
+                # remove thread from array of active threads to monitor
+                activeThreads.remove(t)
 
-        for sRCMsg in sThreadRCMsgs:
-            rootLogger.debug(sRCMsg)
-            arrMsg = sRCMsg.split("=")
-            threadRC = int(arrMsg[1].strip())
-            if threadRC != 0:
-                stateRunRC = threadRC
+                # get next chunk of data
+                rows = SQLFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
+                iNOFRows = len(rows)
+                if iNOFRows == 0:
+                    bEndofChunks = True
+                    break
+                else:
+                    iTotNOFRows += iNOFRows 
 
-        if stateRunRC == 12:
-            raise NextStateRunException("A thread for next state processing generated a RC 12.")
- 
+                ################################        
+                # start new thread
+                ################################
+                rootLogger.info("Start a new thread!")
+                iThreadNum +=1
+                th = Thread(target=geoCodeThreadProcess, args=(iThreadNum, rows))
 
-    except Exception as ex:
-        stateRunRC = 12
-        # re-raise the error to be caught by main function
-        raise
+                # add thread to list of threads to monitor
+                activeThreads.append(th)
 
-    finally:
-        ###################################################
-        # Capture NextRun stats.
-        ###################################################
-        EndNextStatesTime = datetime.datetime.now()
-        StatesElapsedTime = str(EndNextStatesTime - StartNextStatesTime)
-        frmtNOFRows = "{:,}".format(iStateNOFRows)
-        iTotNOFRows += iStateNOFRows
+                rootLogger.info(f"Start new thread {th.name} started at "+getDateTime())
+                th.start()
+                rootLogger.info(f"Thread {th.name} id: "+str(th.native_id))
+     
+                
+    ###################################################
+    # wait for remaining active threads to complete
+    ###################################################
+    rootLogger.info("Waiting for threads to finish")
 
-        ###################################################
-        # Write stats to logfile.
-        ###################################################
-        rootLogger.info("Next set of state(s) processing completed.")
-        rootLogger.info(f"State(s) processed: {sStateList}") 
-        rootLogger.info("Elapsed processing time: "+ str(StatesElapsedTime)) 
-        rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
-        rootLogger.info("Next set of state(s) RC = "+str(stateRunRC))
-        rootLogger.info("*************************************")
-
-        ###################################################
-        # Write next state(s) run stats to array.
-        ###################################################
-        # Reformat list of states for report
-        #     sStateList = "'AL','MD'" --> "AL MD" 
-        sStList = str(sStateList.replace(","," ")).replace("'","")
-        lst = list([sStList, "'"+str(StatesElapsedTime), frmtNOFRows, str(stateRunRC) ])
-        arrJobStatMsgs.append(lst)
+    # Wait for threads to complete
+    for t in activeThreads:
+        t.join()   
 
 
-def getAppConfigValues():
+
+"""
+def mainNoThreads():
+
+    ###############################
+    # variables
+    ###############################
+    bEndofChunks = False
+    iTotNOFRows = 0
+    iChunkNum = 0
+
+    ###############################
+    # Starting info
+    ###############################
+    StartJobTime = datetime.datetime.now()
+
+    rootLogger.info("\n##########################")
+    rootLogger.info("Start function mainNoThreads")
+
+    ###################################################
+    # get DB cursor
+    ###################################################
+    global sCursorColNames
+
+    cursor = SQLFncts.getManyRowsCursor(SqlStmtGeo1, None)
+    sCursorColNames = SQLFncts.cursorColumnNames
+
+    ###################################################
+    # Create Initial x number of threads
+    ###################################################
+    rootLogger.info("Start process")
+
+    while bEndofChunks == False:
+        # get next chunk of data
+        rows = SQLFncts.getManyRowsNext(cursor, CHUNK_SIZE_NOF_ROWS)
+
+        # if no-more-data 
+        iNOFRows = len(rows)
+        if iNOFRows == 0:
+            bEndofChunks = True
+            break
+        else:
+            iTotNOFRows += iNOFRows 
+            iChunkNum += 1
+            geoCodeThreadProcess(iChunkNum, rows)
+
+                
+    ###################################################
+    # Set job RC from thread RCs.
+    ###################################################        
+    jobRC = 0
+    rootLogger.info("jobRC = "+str(jobRC))
+
+    ###################################################
+    # Print statistics
+    ################################################### 
+    frmtNOFRows = "{:,}".format(iTotNOFRows)
+    EndJobTime = datetime.datetime.now()
+    ElapsedTime = str(EndJobTime - StartJobTime)
+
+    rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
+    rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
+    rootLogger.info("No Thread Process:")
+    rootLogger.info("CHUNK_SIZE_NOF_ROWS:" + str(CHUNK_SIZE_NOF_ROWS))    
+
+    sys.exit(jobRC)
+"""
+
+def getConfigValues():
     ###############################
     # Get App config filename
     ###############################
@@ -474,10 +452,10 @@ def getAppConfigValues():
         global NOF_STATES_2_PROCESS_AT_ONCE
         global STATES_2_PROCESS
 
-        MAX_NOF_ACTIVE_THREADS = int(config.get('RunParms','maxThreads'))
-        CHUNK_SIZE_NOF_ROWS = int(config.get('RunParms','chunkSize'))
-        MAX_NOF_RETRIES = int(config.get('RunParms','maxRetries'))
-        NOF_STATES_2_PROCESS_AT_ONCE = int(config.get('RunParms','NOFStatesAtOnce'))
+        MAX_NOF_ACTIVE_THREADS = config.get('RunParms','maxThreads')
+        CHUNK_SIZE_NOF_ROWS = config.get('RunParms','chunkSize')
+        MAX_NOF_RETRIES = config.get('RunParms','maxRetries')
+        NOF_STATES_2_PROCESS_AT_ONCE = config.get('RunParms','NOFStatesInDBCursor')
         STATES_2_PROCESS = config.get('RunParms','States2Process')
 
         rootLogger.info(f"MAX_NOF_ACTIVE_THREADS={MAX_NOF_ACTIVE_THREADS}")
@@ -494,49 +472,35 @@ def getAppConfigValues():
 def main():
     ########################################################
     # Main program driver: 
-    #    Iterates thru all states to be processed,
-    #       passing a subset of states each time it calls 
-    #       mainThreadDriver.
-    # NOTE: NOF_STATES_2_PROCESS_AT_ONCE = subset of states.
+    #    Iterates thru all available states passing a subset 
+    #    of states each time it calls mainThreadDriver
     ########################################################
-    jobRC = 0
-
     try:
+
         StartJobTime = datetime.datetime.now()
 
         rootLogger.info("\n##########################")
         rootLogger.info("Start function main")
 
-        # Delete rows when inserting
         #SQLFncts.DeleteRows(SqlDelete, None)
 
         #################################################
         # get Configuration Values
         #################################################
-        getAppConfigValues()
+        getConfigValues()
+
+        sys.exit(0)
 
         #################################################
-        # get list of states that need addresses geocoded
+        # get all states that need addresses geocoded
         #################################################
-        if STATES_2_PROCESS == "ALL":
-            sSQLStates2Process = SqlListOfAllStates
-        else:
-            arrStates = STATES_2_PROCESS.split(",")
-            sStates2Process = "'" + "','".join(arrStates) + "'"
-            rootLogger.debug(sStates2Process)
-            # NOTE: For In-phrase, passing a comma-delim list is treated as muliple parms instead of 
-            # one parm. This results in an error when only one parameter marker is in SQL.
-            sSQLStates2Process = SqlListOfSomeStates.replace("?",sStates2Process)            
-
-
-        rootLogger.debug(sSQLStates2Process)
-        arrListOfStates = SQLFncts.getAllRows(sSQLStates2Process, None)
-
+        arrListOfStates = SQLFncts.getAllRows(SqlListOfStates, None)
         maxNOFStates = len(arrListOfStates)
-        rootLogger.info(f"NOF States to process: {maxNOFStates}")
+
+        rootLogger.info(f"NOF States to process:{maxNOFStates}")
 
         #################################################
-        # 1) Extract a subset of states to process
+        # 1) Extract a subset of states 
         # 2) Format State In-Phrase
         # 3) Replace parm marker with State In-Phrase
         # 4) Call mainThreadDriver
@@ -546,58 +510,58 @@ def main():
 
             l = [",".join(st) for st in stateList]
             sStateList = "'" + "','".join(l) + "'"
-            rootLogger.info(f"Next Set of States to process: {sStateList} ")
+            rootLogger.info(f"List of States to process: {sStateList} ")
 
             #########################################################
             # Replace param marker with list of states in SELECT. 
-            # NOTE: In-phrase csv-list of values is treated as if 
-            #       multiple parms instead of one. 
+            # NOTE: Did it this way because single parm with commas 
+            #       was being treated as separate parms. 
             #########################################################
             sSQL2Process = SqlStmtGeo1.replace("?",sStateList)
             #rootLogger.debug(sSQL2Process)
-            mainThreadDriver(sSQL2Process, sStateList)
+            mainThreadDriver(sSQL2Process,sStateList)
 
 
-    except Exception as ex:
-        jobRC = 12
-        rootLogger.error(ex)
-        rootLogger.error("Processing terminated because of errors!")
-
-    finally:
         ###################################################
-        # create total stats
+        # Set job RC from thread RCs.
+        ###################################################        
+        jobRC = 0
+        rootLogger.debug("Thread RCs")
+
+        for sRCMsg in sThreadRCMsgs:
+            rootLogger.debug(sRCMsg)
+            arrMsg = sRCMsg.split("=")
+            threadRC = int(arrMsg[1].strip())
+            if threadRC != 0:
+                jobRC = threadRC
+
+        ###################################################
+        # Print statistics
         ################################################### 
         frmtNOFRows = "{:,}".format(iTotNOFRows)
         EndJobTime = datetime.datetime.now()
         ElapsedTime = str(EndJobTime - StartJobTime)
 
-        lst = list(["Total Run", "'"+str(ElapsedTime), frmtNOFRows, str(jobRC) ])
-        arrJobStatMsgs.append(lst)
-
-        ###################################################
-        # write log messages
-        ################################################### 
         rootLogger.info("jobRC = "+str(jobRC))
 
         rootLogger.info("Elapsed processing time: "+ str(ElapsedTime)) 
-        rootLogger.info(f"States processed: {STATES_2_PROCESS}") 
+        rootLogger.info(f"States processed: {sStateList}") 
         rootLogger.info("Total NOF rows processed: "+ frmtNOFRows) 
         rootLogger.info("MAX_NOF_ACTIVE_THREADS: " + str(MAX_NOF_ACTIVE_THREADS))
         rootLogger.info("CHUNK_SIZE_NOF_ROWS: " + str(CHUNK_SIZE_NOF_ROWS))    
 
-        ###################################################
-        # create report from vsc file.
-        ###################################################
-        sHeader = list(["State(s) processed", "ElapsedTime", "NOF Rows Processed", "RC"])
-        SQLFncts.createCSVFile(rptFile, sHeader, arrJobStatMsgs, ",")
-        #rootLogger.debug(arrJobStatMsgs)
-        
         sys.exit(jobRC)
+
+    except Exception as ex:
+        rootLogger.error("Processing terminated because of errors!")
 
 
 if __name__ == "__main__":  # confirms that the code is under main function
 
-    main()
-
+    try:
+        main()
+        #mainNoThreads()
+    except Exception as e:
+        rootLogger.error(e)
 
 

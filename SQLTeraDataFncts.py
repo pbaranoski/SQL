@@ -99,7 +99,7 @@ def getConnection():
         cnx = teradatasql.TeradataConnection(host=td_hostx, user=td_username, password=td_password, database = td_database, dbs_port= "1025",logmech="LDAP" )
         
         logger.info("Connected to Database!")
-        logger.info(getDriverVersion(cnx))
+        logger.debug(getDriverVersion(cnx))
 
     except teradatasql.Error as err:    
         logger.error("Could NOT connect to Database!")
