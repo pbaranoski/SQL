@@ -48,7 +48,7 @@ logger.addHandler(fh)
 # MySQL Connection string values
 ##########################################
 mysql_user="root"
-mysql_password="trba0A!8" 
+mysql_password="xxxxxxx" 
 mysql_host="127.0.0.1"
 mysql_database="prod"
 mysql_port="3306"
