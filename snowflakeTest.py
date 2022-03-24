@@ -10,8 +10,8 @@ SqlStmt2 = """
 ##########################################
 # MySQL Connection string values
 ##########################################
-snowflake_user="BZH3"
-snowflake_password="pgbg0g0G" 
+snowflake_user="xxxx"
+snowflake_password="xxxxxx" 
 snowflake_account="cms-idrnp.privatelink"
 snowflake_warehouse="BIA_NP_ETL_WKLD"
 snowflake_database="IDRC_DEV"
